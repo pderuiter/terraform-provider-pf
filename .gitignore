@@ -27,3 +27,5 @@ crash.log
 *.key
 *.pem
 *.crt
+# ...except these public certificates/keys used by the release jobs
+!/scripts/wbyc-root-ca.pem

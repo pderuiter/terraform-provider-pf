@@ -7,7 +7,7 @@ description: |-
 # pf Provider
 
 The pf provider manages [OpenBSD pf](https://www.openbsd.org/faq/pf/) through
-[pfapid](https://gitlab.bsdserver.nl/wbyc/infra/pfapid), a privilege-separated REST API that runs on the
+[pfapid](https://github.com/pderuiter/pfapid), a privilege-separated REST API that runs on the
 firewall. It manages:
 
 * **anchors** (`pf_anchor`): rule sets loaded as `api/<name>`, typed rules only (no raw pf.conf);
@@ -30,9 +30,18 @@ on refresh and restored by the next apply.
 
 ## Authentication
 
-pfapid uses mutual TLS 1.3. The client certificate's CN is the client name in the firewall's pfapid
-configuration, which limits it to certain anchors and tables. The arguments fall back to environment variables;
-each certificate argument takes PEM text or a file path.
+pfapid uses mutual TLS 1.3. The firewall's pfapid configuration lists its clients, each limited to certain
+anchors and tables. A client is identified by its certificate's CN, or by a SPIFFE ID (`spiffe://...` URI SAN,
+as in an X509-SVID), and must be issued by the CA bundle that client is bound to.
+
+The certificates can come from anywhere:
+* pfapid's built-in CA (`pfapid pki issue -name <client> -out <prefix>` on the firewall);
+* your company CA, or an intermediate pfapid signs with;
+* short-lived certificates from Vault PKI, SPIRE (`spiffe-helper`), step-ca or cert-manager.
+
+`client_cert` may include intermediates after the leaf. The arguments fall back to environment variables; each
+certificate argument takes PEM text or a file path. A path is read when the provider is configured, so a file that
+an agent renews is picked up by the next Terraform run.
 
 | Argument      | Environment variable  |
 |---------------|-----------------------|
@@ -63,7 +72,7 @@ provider "pf" {
 
 - `ca_cert` (String) CA certificate that signed the pfapid server certificate, in PEM form, or the path of a PEM file. Can also be set with the `PFAPID_CA_CERT` environment variable.
 - `change_wait` (Number) Seconds a change waits while another client's change is pending on the firewall (pfapid allows one at a time). Defaults to `300`. Can also be set with the `PFAPID_CHANGE_WAIT` environment variable.
-- `client_cert` (String) Client certificate (its CN is the pfapid client name), in PEM form, or the path of a PEM file. Can also be set with the `PFAPID_CLIENT_CERT` environment variable.
+- `client_cert` (String) Client certificate, identified by its CN or SPIFFE ID; may include intermediates after the leaf, in PEM form, or the path of a PEM file. Can also be set with the `PFAPID_CLIENT_CERT` environment variable.
 - `client_key` (String, Sensitive) Private key of the client certificate, in PEM form, or the path of a PEM file. Can also be set with the `PFAPID_CLIENT_KEY` environment variable.
 - `endpoint` (String) pfapid URL, e.g. `https://192.0.2.1:8443` (the firewall's management address). Can also be set with the `PFAPID_ENDPOINT` environment variable.
 - `timeout` (Number) Timeout in seconds for each API request. Defaults to `30`. Can also be set with the `PFAPID_TIMEOUT` environment variable.

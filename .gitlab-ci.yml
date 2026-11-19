@@ -1,22 +1,30 @@
-# terraform-provider-pf: Terraform provider for OpenBSD pf via pfapid.
+# Pipeline for terraform-provider-pf (Terraform provider for OpenBSD pf via
+# pfapid). Same release flow as terraform-provider-listmonk; see RELEASING.md.
 #
 #   MR / main   lint (blocking, incl. docs drift), unit tests, acceptance
 #               tests against an in-process fake pfapid (Terraform matrix),
-#               build, govulncheck / gosec / trivy
+#               govulncheck / gosec / trivy.
+#   main        mirror:github pushes main to GitHub; release:tag (toolkit)
+#               tags vX.Y.Z from the Conventional Commits since the last tag.
+#   tag vX.Y.Z  tests again, then
+#                 build:release   GoReleaser, build only: zips, SHA256SUMS, manifest
+#                 sign:gpg        SHA256SUMS.sig with the Registry signing key
+#                 sign:cosign     <file>.sigstore.json with the estate cosign key
+#                 publish:nexus   the signed set -> Nexus raw repo terraform-providers
+#                 publish:github  those files, from Nexus, -> GitHub release -> Registry
+#                 verify:registry `terraform init` from the Registry, signature checked
 #
-# Releases (Nexus + GitHub mirror + Registry, like terraform-provider-listmonk)
-# are not wired yet: that needs this project in the gitlab-ci-terraform-registry
-# JWT role and signing_project_ids first. Until then, build locally and use
-# dev_overrides or a filesystem mirror.
-#
-# Acceptance tests against a real firewall (TestAccLab) run from an operator
-# workstation against the lab VM, not in CI.
+# Secrets come from Vault through the JWT role RELEASE_VAULT_ROLE, bound to
+# this project's protected refs. Acceptance tests against a real firewall
+# (TestAccLab) run from an operator workstation against the lab VM, not in CI.
 include:
   - project: wbyc/infra/ci-cd-toolkit
     ref: $CI_CD_TOOLKIT_VERSION
     file:
       - /templates/common/stages.yml
       - /templates/ci/go.yml
+      - /templates/common/release.yml
+      - /templates/common/cosign.yml
 
 # MR pipelines for MR branches, branch pipelines otherwise.
 workflow:
@@ -34,6 +42,20 @@ variables:
   BUILD_PLATFORMS: "linux/amd64,darwin/arm64,openbsd/amd64"
   BASE_GO_VERSION: "1.2.0"
   TF_VERSION_LATEST: "1.17.1"
+  # Vault: JWT role of the release jobs (terragrunt-live prd/security/
+  # vault-jwt-auth). Its own variable: the wbyc group variable VAULT_AUTH_ROLE
+  # would override a YAML VAULT_AUTH_ROLE.
+  RELEASE_VAULT_ROLE: "gitlab-ci-terraform-registry"
+  # KV v2 paths under secret/: gpg {private_key, passphrase}.
+  VAULT_SECRET_BASE: "wbyc/prd/infra/terraform-registry"
+  # GitHub PAT {token}, shared by every provider repository (vault-management).
+  VAULT_GITHUB_PATH: "wbyc/prd/infra/github/pderuiter"
+  # Nexus service account ci-publish {username, password}.
+  VAULT_NEXUS_PATH: "prod/nexus/ci-publish"
+  NEXUS_URL: "https://nexus.bsdserver.nl"
+  NEXUS_RAW_REPO: "terraform-providers"
+  GITHUB_REPOSITORY: "pderuiter/terraform-provider-pf"
+  ALPINE_IMAGE: "${NEXUS_DOCKERHUB}/library/alpine:3.24.2"
 
 # ==============================================================================
 # Lint: blocking (the toolkit marks its lint jobs allow_failure).
@@ -93,7 +115,166 @@ test:acceptance:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_COMMIT_TAG
 
-# Not applicable to a provider.
+# Not applicable to a provider: replaced by the jobs above and below.
 test:integration:
   rules:
     - when: never
+
+test:e2e:
+  rules:
+    - when: never
+
+build:binary:
+  rules:
+    - when: never
+
+publish:binaries:
+  rules:
+    - when: never
+
+# ==============================================================================
+# GitHub mirror and release.
+# ==============================================================================
+
+.release_vault:
+  id_tokens:
+    VAULT_ID_TOKEN:
+      aud: "${CI_SERVER_URL}"
+  interruptible: false
+  # The Vault role only admits protected refs; don't start where it refuses.
+  rules:
+    - if: $CI_COMMIT_REF_PROTECTED != "true"
+      when: never
+
+# Release tags: vX.Y.Z or vX.Y.Z-<pre>. Pre-releases are published as GitHub
+# pre-releases, which users only get by pinning the exact version.
+.release_tag_rules:
+  rules:
+    - !reference [.release_vault, rules]
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/
+
+# Push main to GitHub so the mirror always shows the code behind the next
+# release. Fast-forward only: a commit made on GitHub fails this job.
+mirror:github:
+  extends: .release_vault
+  stage: publish
+  image: ${ALPINE_IMAGE}
+  variables:
+    GIT_DEPTH: "0"
+    GIT_STRATEGY: clone
+  needs:
+    - job: test:unit
+    - job: test:acceptance
+  before_script:
+    - apk add --no-cache git curl jq >/dev/null
+  script:
+    - . scripts/vault.sh
+    - vault_login
+    - export GITHUB_TOKEN="$(vault_kv "${VAULT_GITHUB_PATH}" token)"
+    - scripts/github-mirror.sh branch
+  rules:
+    - !reference [.release_vault, rules]
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+
+# GoReleaser in the standard Go image, build only (no signing, no publishing,
+# no secrets). The manifest is copied into dist/ under its release name; the
+# SHA256SUMS already covers it.
+build:release:
+  extends: .go_base
+  stage: build
+  needs:
+    - job: test:unit
+    - job: test:acceptance
+  script:
+    - go install "github.com/goreleaser/goreleaser/v2@${GORELEASER_VERSION}"
+    - goreleaser release --clean --skip=publish
+    - cp terraform-registry-manifest.json "dist/terraform-provider-pf_${CI_COMMIT_TAG#v}_manifest.json"
+    - (cd dist && sha256sum -c terraform-provider-pf_*_SHA256SUMS)
+  artifacts:
+    paths:
+      - dist/*.zip
+      - dist/*_SHA256SUMS
+      - dist/*_manifest.json
+    expire_in: 30 days
+  rules:
+    - !reference [.release_tag_rules, rules]
+
+sign:gpg:
+  extends: .release_vault
+  stage: build
+  image: ${ALPINE_IMAGE}
+  needs:
+    - job: build:release
+  script:
+    - scripts/sign-gpg.sh
+  artifacts:
+    paths:
+      - dist/*_SHA256SUMS.sig
+    expire_in: 30 days
+  rules:
+    - !reference [.release_tag_rules, rules]
+
+# Estate rule: every artefact we build is cosign-signed (transit key
+# cosign-estate). Through the release role, which carries the transit policy
+# for this project's protected TAGS (the shared signing role admits branches).
+sign:cosign:
+  extends: .cosign_sign_blob
+  stage: build
+  needs:
+    - job: build:release
+  variables:
+    COSIGN_VAULT_ROLE: "${RELEASE_VAULT_ROLE}"
+    COSIGN_BLOBS: "dist/*.zip dist/*_SHA256SUMS dist/*_manifest.json"
+  interruptible: false
+  rules:
+    - if: $COSIGN_SIGNING_ENABLED == "false"
+      when: never
+    - !reference [.release_tag_rules, rules]
+
+publish:nexus:
+  extends: .release_vault
+  stage: publish
+  image: ${ALPINE_IMAGE}
+  needs:
+    - job: build:release
+    - job: sign:gpg
+    - job: sign:cosign
+  script:
+    - scripts/publish-nexus.sh
+  rules:
+    - !reference [.release_tag_rules, rules]
+
+publish:github:
+  extends: .release_vault
+  stage: publish
+  image: ${ALPINE_IMAGE}
+  variables:
+    GIT_DEPTH: "0"
+    GIT_STRATEGY: clone
+  needs:
+    - job: publish:nexus
+      artifacts: false
+  script:
+    - scripts/publish-github.sh
+  rules:
+    - !reference [.release_tag_rules, rules]
+
+# The check a user's `terraform init` makes: the Registry lists the version,
+# serves the zip, and the SHA256SUMS signature matches the key registered for
+# the pderuiter namespace. Final releases only.
+verify:registry:
+  stage: verify
+  image: ${ALPINE_IMAGE}
+  needs:
+    - job: publish:github
+      artifacts: false
+  before_script:
+    - apk add --no-cache bash curl unzip >/dev/null
+  script:
+    - export TERRAFORM="$(TF_VERSION="${TF_VERSION_LATEST}" scripts/install-terraform.sh)"
+    - VERSION="${CI_COMMIT_TAG#v}" scripts/verify-registry.sh
+  # Registry ingestion is outside this pipeline's control (Registry or GitHub
+  # delays); a failure here means "go look", not "the release is broken".
+  allow_failure: true
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
