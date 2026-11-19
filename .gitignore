@@ -1,0 +1,29 @@
+# Build output
+/terraform-provider-pf
+/dist/
+
+# Local acceptance-test environment (TestAccLab env)
+/.cache/
+
+# CI Go caches (ci-cd-toolkit keeps GOPATH/GOCACHE in the checkout)
+/.go/
+/.go-cache/
+
+# Test and scan reports
+coverage.*
+test-output.txt
+*-report.json
+govulncheck.json
+gl-code-quality-report.json
+
+# Terraform working files from trying the examples
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Never commit key material
+*.key
+*.pem
+*.crt
