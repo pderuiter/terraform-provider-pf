@@ -32,6 +32,7 @@ type change struct {
 	id, actor, kind, name, op string
 	prevA, nextA              json.RawMessage // anchor rules; nil = absent
 	prevT, nextT              []string
+	prevQ, nextQ              json.RawMessage
 	etag                      string
 }
 
@@ -44,6 +45,8 @@ type Server struct {
 	tables  map[string][]string        // committed entries
 	kernelA map[string]json.RawMessage // what "pf" has loaded
 	kernelT map[string][]string
+	qos     json.RawMessage // committed QoS document
+	kernelQ json.RawMessage
 	pending *change
 	seq     int
 	// Counters and switches for tests.
@@ -87,6 +90,7 @@ func New(tables ...string) *Server {
 		ClientCertPEM: cliCert, ClientKeyPEM: cliKey,
 		anchors: map[string]json.RawMessage{}, tables: map[string][]string{},
 		kernelA: map[string]json.RawMessage{}, kernelT: map[string][]string{},
+		qos: json.RawMessage(`{"queues":[],"rules":[]}`), kernelQ: json.RawMessage(`{"queues":[],"rules":[]}`),
 	}
 	for _, t := range tables {
 		s.tables[t] = []string{}
@@ -188,6 +192,29 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		a, b := slices.Sorted(slices.Values(want)), slices.Sorted(slices.Values(s.kernelT[parts[1]]))
 		writeJSON(w, 200, map[string]any{"in_sync": slices.Equal(a, b), "expected": a, "live": b})
+	case parts[0] == "qos" && len(parts) == 1:
+		s.qosDoc(w, r, actor)
+	case parts[0] == "qos" && len(parts) == 2 && parts[1] == "validate" && r.Method == http.MethodPost:
+		doc, ok := s.readQoS(w, r)
+		if !ok {
+			return
+		}
+		var q struct {
+			Queues []map[string]any `json:"queues"`
+			Rules  []map[string]any `json:"rules"`
+		}
+		_ = json.Unmarshal(doc, &q)
+		var out []string
+		for _, qu := range q.Queues {
+			out = append(out, fmt.Sprintf("queue %v bandwidth %v", qu["name"], qu["bandwidth"]))
+		}
+		for _, rl := range q.Rules {
+			out = append(out, fmt.Sprintf("match %v on %v %v", rl["direction"], rl["interface"], rl["family"]))
+		}
+		writeJSON(w, 200, map[string]any{"rendered": out, "normalised": out})
+	case parts[0] == "qos" && len(parts) == 2 && parts[1] == "drift":
+		in := string(s.kernelQ) == string(s.qos)
+		writeJSON(w, 200, map[string]any{"in_sync": in, "expected": []string{string(s.qos)}, "live": []string{string(s.kernelQ)}})
 	case parts[0] == "changes" && len(parts) == 3 && r.Method == http.MethodPost:
 		s.finish(w, actor, parts[1], parts[2])
 	default:
@@ -306,6 +333,70 @@ func (s *Server) table(w http.ResponseWriter, r *http.Request, actor, name strin
 	}
 }
 
+// readQoS decodes a QoS body into compact canonical JSON. Rules must be
+// match rules, like pfapid's QoS validation; RejectLabel gives a 422.
+func (s *Server) readQoS(w http.ResponseWriter, r *http.Request) (json.RawMessage, bool) {
+	var v map[string]any
+	if json.NewDecoder(r.Body).Decode(&v) != nil {
+		fail(w, 400, "invalid", "bad body")
+		return nil, false
+	}
+	doc, _ := json.Marshal(v)
+	if strings.Contains(string(doc), RejectLabel) {
+		fail(w, 422, "pf_rejected", "syntax error")
+		return nil, false
+	}
+	rules, _ := v["rules"].([]any)
+	for _, rl := range rules {
+		if m, _ := rl.(map[string]any); m["action"] != "match" {
+			fail(w, 400, "invalid", "QoS rules classify only: action must be match")
+			return nil, false
+		}
+	}
+	return doc, true
+}
+
+func (s *Server) qosDoc(w http.ResponseWriter, r *http.Request, actor string) {
+	tag := etag(s.qos)
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("ETag", `"`+tag+`"`)
+		writeJSON(w, 200, map[string]any{"qos": s.qos, "etag": tag})
+	case http.MethodPut:
+		if s.pending != nil {
+			s.Conflicts++
+			fail(w, 409, "conflict", "change pending")
+			return
+		}
+		if ifMatch(r) != tag {
+			fail(w, 412, "precondition", "ETag mismatch")
+			return
+		}
+		doc, ok := s.readQoS(w, r)
+		if !ok {
+			return
+		}
+		s.kernelQ = doc
+		s.begin(w, &change{actor: actor, kind: "qos", name: "qos", op: "put", prevQ: s.qos, nextQ: doc, etag: etag(doc)})
+	default:
+		fail(w, 405, "invalid", "method")
+	}
+}
+
+// TamperQoS changes the "kernel" queues, to simulate drift.
+func (s *Server) TamperQoS() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.kernelQ = json.RawMessage(`{"tampered":true}`)
+}
+
+// QoS returns the committed QoS document.
+func (s *Server) QoS() json.RawMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.qos
+}
+
 func (s *Server) finish(w http.ResponseWriter, actor, id, what string) {
 	c := s.pending
 	if c == nil || c.id != id {
@@ -323,24 +414,30 @@ func (s *Server) finish(w http.ResponseWriter, actor, id, what string) {
 			return
 		}
 		s.Confirms++
-		if c.kind == "anchor" {
+		switch c.kind {
+		case "qos":
+			s.qos = c.nextQ
+		case "anchor":
 			if c.op == "delete" {
 				delete(s.anchors, c.name)
 			} else {
 				s.anchors[c.name] = c.nextA
 			}
-		} else {
+		default:
 			s.tables[c.name] = c.nextT
 		}
 	case "rollback":
 		s.Rollbacks++
-		if c.kind == "anchor" {
+		switch c.kind {
+		case "qos":
+			s.kernelQ = c.prevQ
+		case "anchor":
 			if c.prevA == nil {
 				delete(s.kernelA, c.name)
 			} else {
 				s.kernelA[c.name] = c.prevA
 			}
-		} else {
+		default:
 			s.kernelT[c.name] = c.prevT
 		}
 	default:

@@ -49,19 +49,52 @@ type Prio struct {
 }
 
 type Rule struct {
-	Action      string   `json:"action"`
-	Direction   string   `json:"direction,omitempty"`
-	Quick       bool     `json:"quick,omitempty"`
-	Log         bool     `json:"log,omitempty"`
-	BlockReturn bool     `json:"block_return,omitempty"`
-	Interface   string   `json:"interface"`
-	Family      string   `json:"family"`
-	Protocol    string   `json:"protocol,omitempty"`
-	From        Endpoint `json:"from"`
-	To          Endpoint `json:"to"`
-	NAT         *NAT     `json:"nat,omitempty"`
-	Prio        *Prio    `json:"prio,omitempty"`
-	Label       string   `json:"label,omitempty"`
+	Action      string    `json:"action"`
+	Direction   string    `json:"direction,omitempty"`
+	Quick       bool      `json:"quick,omitempty"`
+	Log         bool      `json:"log,omitempty"`
+	BlockReturn bool      `json:"block_return,omitempty"`
+	Interface   string    `json:"interface"`
+	Family      string    `json:"family"`
+	Protocol    string    `json:"protocol,omitempty"`
+	From        Endpoint  `json:"from"`
+	To          Endpoint  `json:"to"`
+	NAT         *NAT      `json:"nat,omitempty"`
+	Prio        *Prio     `json:"prio,omitempty"`
+	Queue       *QueueSet `json:"queue,omitempty"`
+	Label       string    `json:"label,omitempty"`
+}
+
+// QueueSet is `set queue name` or `set queue (name, priority)`. Only valid
+// in the QoS document.
+type QueueSet struct {
+	Name     string `json:"name"`
+	Priority string `json:"priority,omitempty"`
+}
+
+type Queue struct {
+	Name      string `json:"name"`
+	Interface string `json:"interface,omitempty"`
+	Parent    string `json:"parent,omitempty"`
+	Bandwidth string `json:"bandwidth"`
+	Min       string `json:"min,omitempty"`
+	Max       string `json:"max,omitempty"`
+	QLimit    int    `json:"qlimit,omitempty"`
+	Default   bool   `json:"default,omitempty"`
+	Flows     int    `json:"flows,omitempty"`
+	Quantum   int    `json:"quantum,omitempty"`
+}
+
+// QoS is the firewall-wide QoS document.
+type QoS struct {
+	Queues []Queue `json:"queues"`
+	Rules  []Rule  `json:"rules"`
+}
+
+type QoSState struct {
+	QoS           QoS    `json:"qos"`
+	ETag          string `json:"etag"`
+	PendingChange string `json:"pending_change,omitempty"`
 }
 
 type Anchor struct {
@@ -286,6 +319,43 @@ func (c *Client) DriftTable(ctx context.Context, name string) (*Drift, error) {
 	var v Drift
 	err := c.do(ctx, http.MethodGet, "/v1/tables/"+url.PathEscape(name)+"/drift", nil, nil, &v)
 	return &v, err
+}
+
+func (c *Client) GetQoS(ctx context.Context) (*QoSState, error) {
+	var v QoSState
+	if err := c.do(ctx, http.MethodGet, "/v1/qos", nil, nil, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+func qosBody(q QoS) QoS {
+	if q.Queues == nil {
+		q.Queues = []Queue{}
+	}
+	if q.Rules == nil {
+		q.Rules = []Rule{}
+	}
+	return q
+}
+
+func (c *Client) ValidateQoS(ctx context.Context, q QoS) (*Validation, error) {
+	var v Validation
+	err := c.do(ctx, http.MethodPost, "/v1/qos/validate", nil, qosBody(q), &v)
+	return &v, err
+}
+
+func (c *Client) DriftQoS(ctx context.Context) (*Drift, error) {
+	var v Drift
+	err := c.do(ctx, http.MethodGet, "/v1/qos/drift", nil, nil, &v)
+	return &v, err
+}
+
+// ReplaceQoS sets the whole QoS document if its ETag is still etag.
+func (c *Client) ReplaceQoS(ctx context.Context, etag string, q QoS) (*Change, error) {
+	return c.commit(ctx, func() (*Change, error) {
+		return c.submit(ctx, http.MethodPut, "/v1/qos", map[string]string{"If-Match": quoted(etag)}, qosBody(q))
+	})
 }
 
 func anchorBody(rules []Rule) any {

@@ -100,30 +100,36 @@ func (r *anchorResource) ValidateConfig(ctx context.Context, req resource.Valida
 		return // unknown values: pfapid validates at plan time once they are known
 	}
 	for i, rl := range m.Rules {
-		for _, ep := range []struct {
-			name string
-			e    *endpointModel
-		}{{"from", rl.From}, {"to", rl.To}} {
-			if ep.e == nil {
-				continue
-			}
-			n := 0
-			if ep.e.Prefixes != nil {
-				n++
-			}
-			if !ep.e.Table.IsNull() {
-				n++
-			}
-			if !ep.e.Interface.IsNull() {
-				n++
-			}
-			p := path.Root("rules").AtListIndex(i).AtName(ep.name)
-			if n > 1 {
-				resp.Diagnostics.AddAttributeError(p, "Conflicting addresses", "Set only one of prefixes, table and interface.")
-			}
-			if n == 0 && ep.e.Ports == nil {
-				resp.Diagnostics.AddAttributeError(p, "Empty endpoint", "Omit "+ep.name+" entirely to mean any.")
-			}
+		checkEndpoints(path.Root("rules").AtListIndex(i), rl.From, rl.To, &resp.Diagnostics)
+	}
+}
+
+// checkEndpoints reports endpoints that set more than one address kind, or
+// nothing at all (which should be written by omitting the endpoint).
+func checkEndpoints(rule path.Path, from, to *endpointModel, diags *diag.Diagnostics) {
+	for _, ep := range []struct {
+		name string
+		e    *endpointModel
+	}{{"from", from}, {"to", to}} {
+		if ep.e == nil {
+			continue
+		}
+		n := 0
+		if ep.e.Prefixes != nil {
+			n++
+		}
+		if !ep.e.Table.IsNull() {
+			n++
+		}
+		if !ep.e.Interface.IsNull() {
+			n++
+		}
+		p := rule.AtName(ep.name)
+		if n > 1 {
+			diags.AddAttributeError(p, "Conflicting addresses", "Set only one of prefixes, table and interface.")
+		}
+		if n == 0 && ep.e.Ports == nil {
+			diags.AddAttributeError(p, "Empty endpoint", "Omit "+ep.name+" entirely to mean any.")
 		}
 	}
 }
