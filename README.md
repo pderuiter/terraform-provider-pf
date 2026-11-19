@@ -5,6 +5,7 @@ Terraform provider for OpenBSD pf, through
 
 * `pf_anchor`: the rules of anchor `api/<name>` (typed rules, NAT, prio, IPv4 and IPv6).
 * `pf_table`: the contents of a managed table.
+* `pf_qos`: the firewall's HFSC queues and the `match` rules that classify into them.
 
 Every change is commit-confirm: if the provider cannot confirm a change (for
 example because it cut itself off), the firewall rolls it back. `terraform
@@ -41,8 +42,7 @@ provider_installation {
 
 ## Releases
 
-Not wired yet. The plan is the estate's provider release flow (GoReleaser on
-base-go, GPG + cosign signing, Nexus raw repo `terraform-providers`, GitHub
-mirror and Terraform Registry, see terraform-provider-listmonk RELEASING.md).
-It needs this project added to the `gitlab-ci-terraform-registry` JWT role and
-`signing_project_ids`.
+Merging to `main` tags, builds, signs (GPG for the Registry, cosign), stores
+in Nexus and mirrors to GitHub `pderuiter/terraform-provider-pf`, from where
+the Terraform Registry publishes it as `pderuiter/pf`. See
+[RELEASING.md](RELEASING.md).

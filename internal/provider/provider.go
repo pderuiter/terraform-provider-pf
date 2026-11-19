@@ -80,7 +80,7 @@ func (p *pfProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *p
 				Optional:            true,
 			},
 			"client_cert": schema.StringAttribute{
-				MarkdownDescription: pemDesc("Client certificate (its CN is the pfapid client name),", envClientCert),
+				MarkdownDescription: pemDesc("Client certificate, identified by its CN or SPIFFE ID; may include intermediates after the leaf,", envClientCert),
 				Optional:            true,
 			},
 			"client_key": schema.StringAttribute{
