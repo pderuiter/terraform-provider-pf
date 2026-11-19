@@ -1,7 +1,7 @@
 # terraform-provider-pf
 
 Terraform provider for OpenBSD pf, through
-[pfapid](https://gitlab.bsdserver.nl/wbyc/infra/pfapid) on the firewall.
+[pfapid](https://github.com/pderuiter/pfapid) on the firewall.
 
 * `pf_anchor`: the rules of anchor `api/<name>` (typed rules, NAT, prio, IPv4 and IPv6).
 * `pf_table`: the contents of a managed table.
@@ -12,7 +12,7 @@ example because it cut itself off), the firewall rolls it back. `terraform
 plan` checks new rules with the firewall's `pfctl -n`. Hand edits in pf show
 as drift and are restored by the next apply.
 
-Documentation: [docs/](docs/index.md). API contract: pfapid `api/openapi.yaml`.
+Documentation: [docs/](docs/index.md). API contract: pfapid [`api/openapi.yaml`](https://github.com/pderuiter/pfapid/blob/main/api/openapi.yaml).
 
 ## Development
 
@@ -22,10 +22,11 @@ make testacc    # Terraform against an in-process fake pfapid (needs terraform)
 make generate   # docs/
 ```
 
-Against the lab firewall (wbyc-srv-test02, a pfapid client scoped to `k8s-*`):
+Against a real firewall (an OpenBSD test machine running pfapid, with a
+client certificate scoped to `k8s-*`):
 
 ```sh
-export PFAPID_ENDPOINT=https://192.168.2.196:8443
+export PFAPID_ENDPOINT=https://192.0.2.1:8443
 export PFAPID_CA_CERT=… PFAPID_CLIENT_CERT=… PFAPID_CLIENT_KEY=…
 TF_ACC=1 go test ./internal/provider/ -run TestAccLab -v
 ```

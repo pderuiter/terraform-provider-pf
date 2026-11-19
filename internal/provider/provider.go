@@ -67,7 +67,7 @@ func pemDesc(what, env string) string {
 
 func (p *pfProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages OpenBSD pf anchors and tables through [pfapid](https://gitlab.bsdserver.nl/wbyc/infra/pfapid), " +
+		MarkdownDescription: "Manages OpenBSD pf anchors and tables through [pfapid](https://github.com/pderuiter/pfapid), " +
 			"authenticating with a client certificate (mutual TLS 1.3).",
 		Attributes: map[string]schema.Attribute{
 			"endpoint": schema.StringAttribute{

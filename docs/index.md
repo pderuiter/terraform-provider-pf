@@ -7,7 +7,7 @@ description: |-
 # pf Provider
 
 The pf provider manages [OpenBSD pf](https://www.openbsd.org/faq/pf/) through
-[pfapid](https://gitlab.bsdserver.nl/wbyc/infra/pfapid), a privilege-separated REST API that runs on the
+[pfapid](https://github.com/pderuiter/pfapid), a privilege-separated REST API that runs on the
 firewall. It manages:
 
 * **anchors** (`pf_anchor`): rule sets loaded as `api/<name>`, typed rules only (no raw pf.conf);
