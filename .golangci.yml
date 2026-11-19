@@ -1,0 +1,54 @@
+# Same linter set as pfapid and terraform-provider-listmonk (with anchored path exclusions).
+version: "2"
+linters:
+  default: none
+  enable:
+    - copyloopvar
+    - depguard
+    - durationcheck
+    - errcheck
+    - forcetypeassert
+    - gosec
+    - ineffassign
+    - makezero
+    - misspell
+    - nilerr
+    - predeclared
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - usetesting
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Tests build fixtures with unchecked type assertions on purpose.
+      - path: _test\.go
+        linters: [forcetypeassert]
+    # Anchored directory patterns: the CI Go caches live in the checkout.
+    # (A bare `.go$` would be a regex matching every Go file.)
+    paths:
+      - ^\.go/
+      - ^\.go-cache/
+      - ^\.cache/
+  settings:
+    depguard:
+      rules:
+        main:
+          list-mode: lax
+          deny:
+            # pf is driven through pfctl only (docs/DESIGN.md §2): no ioctl
+            # bindings, pfvar.h has no stable ABI.
+            - pkg: "github.com/go-freebsd/pf"
+              desc: "pfapid drives pf through pfctl, not ioctls"
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+formatters:
+  enable:
+    - gofmt
