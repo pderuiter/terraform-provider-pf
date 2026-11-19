@@ -174,19 +174,27 @@ func ruleAttrs() map[string]schema.Attribute {
 				"af_to":   schema.StringAttribute{MarkdownDescription: "`af-to` only: new destination prefix.", Optional: true, Validators: cidr},
 			},
 		},
-		"prio": schema.SingleNestedAttribute{
-			MarkdownDescription: "Queue priority (`set prio`): `normal`, and optionally `low` for empty ACKs and low-delay packets. 0–7.",
-			Optional:            true,
-			Attributes: map[string]schema.Attribute{
-				"normal": schema.Int64Attribute{Required: true, Validators: []validator.Int64{int64validator.Between(0, 7)}},
-				"low":    schema.Int64Attribute{Optional: true, Validators: []validator.Int64{int64validator.Between(0, 7)}},
-			},
+		"prio":  prioAttr(),
+		"label": labelAttr(),
+	}
+}
+
+func prioAttr() schema.SingleNestedAttribute {
+	return schema.SingleNestedAttribute{
+		MarkdownDescription: "Queue priority (`set prio`): `normal`, and optionally `low` for empty ACKs and low-delay packets. 0–7.",
+		Optional:            true,
+		Attributes: map[string]schema.Attribute{
+			"normal": schema.Int64Attribute{Required: true, Validators: []validator.Int64{int64validator.Between(0, 7)}},
+			"low":    schema.Int64Attribute{Optional: true, Validators: []validator.Int64{int64validator.Between(0, 7)}},
 		},
-		"label": schema.StringAttribute{
-			MarkdownDescription: "pf label, shown in `pfctl -s labels` (letters, digits, space and `_.:/-`, at most 63).",
-			Optional:            true,
-			Validators:          []validator.String{stringvalidator.RegexMatches(labelRe, "letters, digits, space and _.:/- only, at most 63 characters")},
-		},
+	}
+}
+
+func labelAttr() schema.StringAttribute {
+	return schema.StringAttribute{
+		MarkdownDescription: "pf label, shown in `pfctl -s labels` (letters, digits, space and `_.:/-`, at most 63).",
+		Optional:            true,
+		Validators:          []validator.String{stringvalidator.RegexMatches(labelRe, "letters, digits, space and _.:/- only, at most 63 characters")},
 	}
 }
 
@@ -255,14 +263,31 @@ func toRule(r ruleModel) client.Rule {
 			out.NAT.Port = &p
 		}
 	}
-	if p := r.Prio; p != nil {
-		out.Prio = &client.Prio{Normal: uint8(p.Normal.ValueInt64())} // #nosec G115 -- schema limits to 0..7
-		if !p.Low.IsNull() {
-			low := uint8(p.Low.ValueInt64()) // #nosec G115 -- schema limits to 0..7
-			out.Prio.Low = &low
-		}
+	out.Prio = toPrio(r.Prio)
+	return out
+}
+
+func toPrio(p *prioModel) *client.Prio {
+	if p == nil {
+		return nil
+	}
+	out := &client.Prio{Normal: uint8(p.Normal.ValueInt64())} // #nosec G115 -- schema limits to 0..7
+	if !p.Low.IsNull() {
+		low := uint8(p.Low.ValueInt64()) // #nosec G115 -- schema limits to 0..7
+		out.Low = &low
 	}
 	return out
+}
+
+func fromPrio(p *client.Prio) *prioModel {
+	if p == nil {
+		return nil
+	}
+	m := &prioModel{Normal: types.Int64Value(int64(p.Normal)), Low: types.Int64Null()}
+	if p.Low != nil {
+		m.Low = types.Int64Value(int64(*p.Low))
+	}
+	return m
 }
 
 func fromRule(r client.Rule) ruleModel {
@@ -280,11 +305,6 @@ func fromRule(r client.Rule) ruleModel {
 			m.NAT.Port = &p
 		}
 	}
-	if p := r.Prio; p != nil {
-		m.Prio = &prioModel{Normal: types.Int64Value(int64(p.Normal)), Low: types.Int64Null()}
-		if p.Low != nil {
-			m.Prio.Low = types.Int64Value(int64(*p.Low))
-		}
-	}
+	m.Prio = fromPrio(r.Prio)
 	return m
 }

@@ -204,7 +204,7 @@ func (p *pfProvider) Configure(ctx context.Context, req provider.ConfigureReques
 }
 
 func (p *pfProvider) Resources(context.Context) []func() resource.Resource {
-	return []func() resource.Resource{NewAnchorResource, NewTableResource}
+	return []func() resource.Resource{NewAnchorResource, NewTableResource, NewQoSResource}
 }
 
 func (p *pfProvider) DataSources(context.Context) []func() datasource.DataSource {
