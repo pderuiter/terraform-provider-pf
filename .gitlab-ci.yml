@@ -1,0 +1,99 @@
+# terraform-provider-pf: Terraform provider for OpenBSD pf via pfapid.
+#
+#   MR / main   lint (blocking, incl. docs drift), unit tests, acceptance
+#               tests against an in-process fake pfapid (Terraform matrix),
+#               build, govulncheck / gosec / trivy
+#
+# Releases (Nexus + GitHub mirror + Registry, like terraform-provider-listmonk)
+# are not wired yet: that needs this project in the gitlab-ci-terraform-registry
+# JWT role and signing_project_ids first. Until then, build locally and use
+# dev_overrides or a filesystem mirror.
+#
+# Acceptance tests against a real firewall (TestAccLab) run from an operator
+# workstation against the lab VM, not in CI.
+include:
+  - project: wbyc/infra/ci-cd-toolkit
+    ref: $CI_CD_TOOLKIT_VERSION
+    file:
+      - /templates/common/stages.yml
+      - /templates/ci/go.yml
+
+# MR pipelines for MR branches, branch pipelines otherwise.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+variables:
+  CI_CD_TOOLKIT_VERSION: "v3.12.3"
+  APP_NAME: "terraform-provider-pf"
+  GO_MAIN_PACKAGE: "."
+  BUILD_PLATFORMS: "linux/amd64,darwin/arm64,openbsd/amd64"
+  BASE_GO_VERSION: "1.2.0"
+  TF_VERSION_LATEST: "1.17.1"
+
+# ==============================================================================
+# Lint: blocking (the toolkit marks its lint jobs allow_failure).
+# ==============================================================================
+
+lint:golangci:
+  allow_failure: false
+
+lint:go-vet:
+  allow_failure: false
+
+lint:go-fmt:
+  allow_failure: false
+
+# docs/ is generated from the schemas, examples/ and templates/.
+lint:docs:
+  extends: .go_base
+  stage: lint
+  script:
+    - export PATH="${CI_PROJECT_DIR}/.cache/bin:${PATH}"
+    - TF_VERSION="${TF_VERSION_LATEST}" scripts/install-terraform.sh
+    - terraform fmt -check -recursive -diff examples/
+    - go generate ./...
+    - |
+      if [ -n "$(git status --porcelain -- docs/)" ]; then
+        git status --porcelain -- docs/
+        git diff -- docs/
+        echo "ERROR: docs/ is out of date. Run 'make generate' and commit the result."
+        exit 1
+      fi
+    - (cd tools && go tool tfplugindocs validate --provider-dir .. --provider-name pf)
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ==============================================================================
+# Acceptance tests: real Terraform against the in-process fake pfapid.
+# ==============================================================================
+
+test:acceptance:
+  extends: .go_base
+  stage: test
+  parallel:
+    matrix:
+      - TF_VERSION: ["1.13.5", "1.17.1"]
+  script:
+    - export TF_ACC_TERRAFORM_PATH="$(scripts/install-terraform.sh)"
+    - TF_ACC=1 go test ./internal/provider/ -v -count=1 -timeout 30m 2>&1 | tee test-output.txt
+  artifacts:
+    paths:
+      - test-output.txt
+    when: always
+    expire_in: 14 days
+  allow_failure: false
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+# Not applicable to a provider.
+test:integration:
+  rules:
+    - when: never

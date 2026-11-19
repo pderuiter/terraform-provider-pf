@@ -1,0 +1,50 @@
+---
+page_title: "pf Provider"
+description: |-
+  Manage OpenBSD pf anchors and tables through pfapid, with commit-confirm.
+---
+
+# pf Provider
+
+The pf provider manages [OpenBSD pf](https://www.openbsd.org/faq/pf/) through
+[pfapid](https://gitlab.bsdserver.nl/wbyc/infra/pfapid), a privilege-separated REST API that runs on the
+firewall. It manages:
+
+* **anchors** (`pf_anchor`): rule sets loaded as `api/<name>`, typed rules only (no raw pf.conf);
+* **tables** (`pf_table`): the contents of tables the firewall's base ruleset declares.
+
+The base ruleset (`/etc/pf.conf`), the management interface and anything outside `api/*` stay out of reach.
+
+## How changes are applied
+
+Every create, update and delete is **commit-confirm**: pfapid loads the change, the provider confirms it over
+the same connection, and pfapid rolls it back by itself if the confirmation never arrives (for example because
+the new rules cut the provider off). `terraform plan` sends new rules to the firewall's `pfctl -n` and shows the
+result in `pf_rules`, so syntax pf would reject fails at plan time.
+
+pfapid accepts one pending change at a time. The provider queues its own changes and waits (up to
+`change_wait`) while another client's change is pending.
+
+Rules loaded in pf that differ from the committed ones (someone used `pfctl` by hand) are reported as a warning
+on refresh and restored by the next apply.
+
+## Authentication
+
+pfapid uses mutual TLS 1.3. The client certificate's CN is the client name in the firewall's pfapid
+configuration, which limits it to certain anchors and tables. The arguments fall back to environment variables;
+each certificate argument takes PEM text or a file path.
+
+| Argument      | Environment variable  |
+|---------------|-----------------------|
+| `endpoint`    | `PFAPID_ENDPOINT`     |
+| `ca_cert`     | `PFAPID_CA_CERT`      |
+| `client_cert` | `PFAPID_CLIENT_CERT`  |
+| `client_key`  | `PFAPID_CLIENT_KEY`   |
+| `timeout`     | `PFAPID_TIMEOUT`      |
+| `change_wait` | `PFAPID_CHANGE_WAIT`  |
+
+## Example Usage
+
+{{ tffile "examples/provider/provider.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
