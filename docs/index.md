@@ -28,6 +28,12 @@ pfapid accepts one pending change at a time. The provider queues its own changes
 Rules loaded in pf that differ from the committed ones (someone used `pfctl` by hand) are reported as a warning
 on refresh and restored by the next apply.
 
+## pfapid versions
+
+Rule attributes `negate` and `self` (on `from`/`to`) and `icmp_types` need pfapid v0.3.0 or later; an older
+pfapid refuses them at plan time. Referencing a table the base ruleset owns (for example a `const` table) needs
+that table in pfapid's `policy.ref_tables`.
+
 ## Authentication
 
 pfapid uses mutual TLS 1.3. The firewall's pfapid configuration lists its clients, each limited to certain

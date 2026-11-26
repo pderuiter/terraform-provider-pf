@@ -102,13 +102,13 @@ Required:
 Optional:
 
 - `direction` (String) `in` or `out`. Omit for both. See the note on states above.
-- `from` (Attributes) Source. Omit for `any`. At most one of `prefixes`, `table` and `interface`. (see [below for nested schema](#nestedatt--rules--from))
+- `from` (Attributes) Source. Omit for `any`. At most one of `prefixes`, `table`, `interface` and `self`. (see [below for nested schema](#nestedatt--rules--from))
 - `label` (String) pf label, shown in `pfctl -s labels` (letters, digits, space and `_.:/-`, at most 63).
 - `log` (Boolean) Log matching packets to pflog. Defaults to `false`.
 - `prio` (Attributes) Queue priority (`set prio`): `normal`, and optionally `low` for empty ACKs and low-delay packets. 0–7. (see [below for nested schema](#nestedatt--rules--prio))
 - `protocol` (String) `tcp`, `udp`, `icmp` (inet) or `icmp6` (inet6). Omit for any.
 - `queue` (Attributes) `set queue`: a leaf queue, and optionally a second one for low-delay packets and TCP ACKs. (see [below for nested schema](#nestedatt--rules--queue))
-- `to` (Attributes) Destination. Omit for `any`. At most one of `prefixes`, `table` and `interface`. (see [below for nested schema](#nestedatt--rules--to))
+- `to` (Attributes) Destination. Omit for `any`. At most one of `prefixes`, `table`, `interface` and `self`. (see [below for nested schema](#nestedatt--rules--to))
 
 <a id="nestedatt--rules--from"></a>
 ### Nested Schema for `rules.from`
@@ -116,9 +116,11 @@ Optional:
 Optional:
 
 - `interface` (String) The interface's own addresses, `(name)` in pf.
+- `negate` (Boolean) Negate the address: `! <address>` in pf. Needs exactly one address: a single prefix, a table, an interface or `self`. A negated list is refused because pf expands `{ !a !b }` into rules that together match everything; negate a table instead. Defaults to `false`.
 - `ports` (Attributes List) Ports (protocol `tcp` or `udp` only). (see [below for nested schema](#nestedatt--rules--from--ports))
 - `prefixes` (List of String) Canonical CIDR prefixes, all of the rule's `family`.
-- `table` (String) A managed table, `<table>` in pf.
+- `self` (Boolean) Every address of the firewall itself: `self` in pf. Defaults to `false`.
+- `table` (String) A table, `<table>` in pf: one pfapid manages (`policy.tables`) or one the base ruleset owns (`policy.ref_tables`, e.g. a `const` table).
 
 <a id="nestedatt--rules--from--ports"></a>
 ### Nested Schema for `rules.from.ports`
@@ -163,9 +165,11 @@ Optional:
 Optional:
 
 - `interface` (String) The interface's own addresses, `(name)` in pf.
+- `negate` (Boolean) Negate the address: `! <address>` in pf. Needs exactly one address: a single prefix, a table, an interface or `self`. A negated list is refused because pf expands `{ !a !b }` into rules that together match everything; negate a table instead. Defaults to `false`.
 - `ports` (Attributes List) Ports (protocol `tcp` or `udp` only). (see [below for nested schema](#nestedatt--rules--to--ports))
 - `prefixes` (List of String) Canonical CIDR prefixes, all of the rule's `family`.
-- `table` (String) A managed table, `<table>` in pf.
+- `self` (Boolean) Every address of the firewall itself: `self` in pf. Defaults to `false`.
+- `table` (String) A table, `<table>` in pf: one pfapid manages (`policy.tables`) or one the base ruleset owns (`policy.ref_tables`, e.g. a `const` table).
 
 <a id="nestedatt--rules--to--ports"></a>
 ### Nested Schema for `rules.to.ports`

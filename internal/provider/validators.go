@@ -13,6 +13,9 @@ import (
 var (
 	nameRe  = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,30}$`)
 	labelRe = regexp.MustCompile(`^[A-Za-z0-9 _.:/-]{0,63}$`)
+	// Shape only; pfapid checks the name against icmp or icmp6 and the
+	// number against 0..255.
+	icmpTypeRe = regexp.MustCompile(`^([a-z][a-z0-9-]{0,15}|0|[1-9][0-9]{0,2})$`)
 )
 
 // cidrValidator requires canonical CIDR notation exactly as pfapid returns

@@ -21,9 +21,11 @@ type portModel struct {
 }
 
 type endpointModel struct {
+	Negate    types.Bool     `tfsdk:"negate"`
 	Prefixes  []types.String `tfsdk:"prefixes"`
 	Table     types.String   `tfsdk:"table"`
 	Interface types.String   `tfsdk:"interface"`
+	Self      types.Bool     `tfsdk:"self"`
 	Ports     []portModel    `tfsdk:"ports"`
 }
 
@@ -53,6 +55,7 @@ type ruleModel struct {
 	Protocol    types.String   `tfsdk:"protocol"`
 	From        *endpointModel `tfsdk:"from"`
 	To          *endpointModel `tfsdk:"to"`
+	ICMPTypes   []types.String `tfsdk:"icmp_types"`
 	NAT         *natModel      `tfsdk:"nat"`
 	Prio        *prioModel     `tfsdk:"prio"`
 	Label       types.String   `tfsdk:"label"`
@@ -79,9 +82,12 @@ func portAttrs() map[string]schema.Attribute {
 
 func endpointAttr(desc string) schema.SingleNestedAttribute {
 	return schema.SingleNestedAttribute{
-		MarkdownDescription: desc + " Omit for `any`. At most one of `prefixes`, `table` and `interface`.",
+		MarkdownDescription: desc + " Omit for `any`. At most one of `prefixes`, `table`, `interface` and `self`.",
 		Optional:            true,
 		Attributes: map[string]schema.Attribute{
+			"negate": boolAttr("Negate the address: `! <address>` in pf. Needs exactly one address: a single prefix, " +
+				"a table, an interface or `self`. A negated list is refused because pf expands `{ !a !b }` into rules " +
+				"that together match everything; negate a table instead."),
 			"prefixes": schema.ListAttribute{
 				MarkdownDescription: "Canonical CIDR prefixes, all of the rule's `family`.",
 				ElementType:         types.StringType,
@@ -89,7 +95,7 @@ func endpointAttr(desc string) schema.SingleNestedAttribute {
 				Validators:          []validator.List{listvalidator.SizeAtLeast(1), listvalidator.ValueStringsAre(cidr...)},
 			},
 			"table": schema.StringAttribute{
-				MarkdownDescription: "A managed table, `<table>` in pf.",
+				MarkdownDescription: "A table, `<table>` in pf: one pfapid manages (`policy.tables`) or one the base ruleset owns (`policy.ref_tables`, e.g. a `const` table).",
 				Optional:            true,
 				Validators:          []validator.String{stringvalidator.RegexMatches(nameRe, "must be a table name")},
 			},
@@ -97,6 +103,7 @@ func endpointAttr(desc string) schema.SingleNestedAttribute {
 				MarkdownDescription: "The interface's own addresses, `(name)` in pf.",
 				Optional:            true,
 			},
+			"self": boolAttr("Every address of the firewall itself: `self` in pf."),
 			"ports": schema.ListNestedAttribute{
 				MarkdownDescription: "Ports (protocol `tcp` or `udp` only).",
 				Optional:            true,
@@ -142,6 +149,18 @@ func ruleAttrs() map[string]schema.Attribute {
 		},
 		"from": endpointAttr("Source."),
 		"to":   endpointAttr("Destination."),
+		"icmp_types": schema.ListAttribute{
+			MarkdownDescription: "`icmp-type` (protocol `icmp`) or `icmp6-type` (protocol `icmp6`): pf type names for that protocol " +
+				"(e.g. `echoreq`, `unreach`, `timex`; for icmp6 also `toobig`, `neighbrsol`, `neighbradv`) or numbers 0–255. " +
+				"pfapid checks the names against the protocol.",
+			ElementType: types.StringType,
+			Optional:    true,
+			Validators: []validator.List{
+				listvalidator.SizeAtLeast(1),
+				listvalidator.UniqueValues(),
+				listvalidator.ValueStringsAre(stringvalidator.RegexMatches(icmpTypeRe, "must be an ICMP type name or a number 0..255")),
+			},
+		},
 		"nat": schema.SingleNestedAttribute{
 			MarkdownDescription: "Address translation. `pass` or `match` rules only.",
 			Optional:            true,
@@ -225,7 +244,7 @@ func toEndpoint(e *endpointModel) client.Endpoint {
 	if e == nil {
 		return client.Endpoint{}
 	}
-	out := client.Endpoint{Table: str(e.Table), Interface: str(e.Interface)}
+	out := client.Endpoint{Negate: e.Negate.ValueBool(), Table: str(e.Table), Interface: str(e.Interface), Self: e.Self.ValueBool()}
 	for _, p := range e.Prefixes {
 		out.Prefixes = append(out.Prefixes, p.ValueString())
 	}
@@ -236,10 +255,10 @@ func toEndpoint(e *endpointModel) client.Endpoint {
 }
 
 func fromEndpoint(e client.Endpoint) *endpointModel {
-	if len(e.Prefixes) == 0 && e.Table == "" && e.Interface == "" && len(e.Ports) == 0 {
+	if !e.Negate && !e.Self && len(e.Prefixes) == 0 && e.Table == "" && e.Interface == "" && len(e.Ports) == 0 {
 		return nil
 	}
-	m := &endpointModel{Table: optStr(e.Table), Interface: optStr(e.Interface)}
+	m := &endpointModel{Negate: types.BoolValue(e.Negate), Table: optStr(e.Table), Interface: optStr(e.Interface), Self: types.BoolValue(e.Self)}
 	for _, p := range e.Prefixes {
 		m.Prefixes = append(m.Prefixes, types.StringValue(p))
 	}
@@ -254,6 +273,9 @@ func toRule(r ruleModel) client.Rule {
 		Action: str(r.Action), Direction: str(r.Direction), Quick: r.Quick.ValueBool(), Log: r.Log.ValueBool(),
 		BlockReturn: r.BlockReturn.ValueBool(), Interface: str(r.Interface), Family: str(r.Family),
 		Protocol: str(r.Protocol), From: toEndpoint(r.From), To: toEndpoint(r.To), Label: str(r.Label),
+	}
+	for _, t := range r.ICMPTypes {
+		out.ICMPTypes = append(out.ICMPTypes, t.ValueString())
 	}
 	if n := r.NAT; n != nil {
 		out.NAT = &client.NAT{Kind: str(n.Kind), Address: str(n.Address), Interface: str(n.Interface),
@@ -296,6 +318,9 @@ func fromRule(r client.Rule) ruleModel {
 		Log: types.BoolValue(r.Log), BlockReturn: types.BoolValue(r.BlockReturn), Interface: types.StringValue(r.Interface),
 		Family: types.StringValue(r.Family), Protocol: optStr(r.Protocol), From: fromEndpoint(r.From),
 		To: fromEndpoint(r.To), Label: optStr(r.Label),
+	}
+	for _, t := range r.ICMPTypes {
+		m.ICMPTypes = append(m.ICMPTypes, types.StringValue(t))
 	}
 	if n := r.NAT; n != nil {
 		m.NAT = &natModel{Kind: types.StringValue(n.Kind), Address: optStr(n.Address), Interface: optStr(n.Interface),

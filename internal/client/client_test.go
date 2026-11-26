@@ -126,14 +126,17 @@ func TestWaitsForForeignPendingChange(t *testing.T) {
 	defer s.Close()
 	c := newClient(t, s)
 
-	s.HoldPending(150 * time.Millisecond)
+	// Released after two 409s, not after a fixed time: a slow runner
+	// (-race) could otherwise send the first request after the hold ended
+	// (the v0.1.1 tag pipeline failed that way).
+	s.HoldPendingConflicts(2)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := c.CreateAnchor(ctx, "y", rules); err != nil {
 		t.Fatal(err)
 	}
-	if s.Conflicts == 0 {
-		t.Fatal("expected at least one 409 while the foreign change was pending")
+	if s.Conflicts != 2 {
+		t.Fatalf("expected two 409s while the foreign change was pending, got %d", s.Conflicts)
 	}
 
 	s.HoldPending(time.Hour)

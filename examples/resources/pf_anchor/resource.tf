@@ -32,3 +32,30 @@ resource "pf_anchor" "k8s_prod" {
     },
   ]
 }
+
+# Egress to the internet only (everything but RFC 1918, a const table the
+# base ruleset owns and lists in policy.ref_tables), and ping to the
+# firewall itself.
+resource "pf_anchor" "egress" {
+  name = "egress"
+  rules = [
+    {
+      action    = "pass"
+      direction = "in"
+      interface = "frontend"
+      family    = "inet"
+      from      = { prefixes = ["10.70.1.0/24"] }
+      to        = { negate = true, table = "rfc1918" }
+    },
+    {
+      action     = "pass"
+      direction  = "in"
+      interface  = "frontend"
+      family     = "inet"
+      protocol   = "icmp"
+      from       = { prefixes = ["10.70.1.0/24"] }
+      to         = { self = true }
+      icmp_types = ["echoreq"]
+    },
+  ]
+}
