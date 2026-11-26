@@ -104,33 +104,38 @@ func (r *anchorResource) ValidateConfig(ctx context.Context, req resource.Valida
 	}
 }
 
-// checkEndpoints reports endpoints that set more than one address kind, or
-// nothing at all (which should be written by omitting the endpoint).
+// checkEndpoints reports endpoints that set more than one address kind,
+// negate nothing or a list, or set nothing at all (which should be written
+// by omitting the endpoint).
 func checkEndpoints(rule path.Path, from, to *endpointModel, diags *diag.Diagnostics) {
 	for _, ep := range []struct {
 		name string
 		e    *endpointModel
 	}{{"from", from}, {"to", to}} {
-		if ep.e == nil {
-			continue
+		if ep.e != nil {
+			checkEndpoint(rule.AtName(ep.name), ep.name, ep.e, diags)
 		}
-		n := 0
-		if ep.e.Prefixes != nil {
+	}
+}
+
+func checkEndpoint(p path.Path, name string, e *endpointModel, diags *diag.Diagnostics) {
+	n := 0
+	for _, set := range []bool{e.Prefixes != nil, !e.Table.IsNull(), !e.Interface.IsNull(), e.Self.ValueBool()} {
+		if set {
 			n++
 		}
-		if !ep.e.Table.IsNull() {
-			n++
-		}
-		if !ep.e.Interface.IsNull() {
-			n++
-		}
-		p := rule.AtName(ep.name)
-		if n > 1 {
-			diags.AddAttributeError(p, "Conflicting addresses", "Set only one of prefixes, table and interface.")
-		}
-		if n == 0 && ep.e.Ports == nil {
-			diags.AddAttributeError(p, "Empty endpoint", "Omit "+ep.name+" entirely to mean any.")
-		}
+	}
+	negate := e.Negate.ValueBool()
+	switch {
+	case n > 1:
+		diags.AddAttributeError(p, "Conflicting addresses", "Set only one of prefixes, table, interface and self.")
+	case n == 0 && negate:
+		diags.AddAttributeError(p, "Nothing to negate", "negate needs an address: one prefix, a table, an interface or self.")
+	case negate && len(e.Prefixes) > 1:
+		diags.AddAttributeError(p, "Negated list", "negate takes exactly one prefix: pf expands { !a !b } into rules that together "+
+			"match everything. Negate a table instead.")
+	case n == 0 && e.Ports == nil:
+		diags.AddAttributeError(p, "Empty endpoint", "Omit "+name+" entirely to mean any.")
 	}
 }
 

@@ -49,6 +49,9 @@ type Server struct {
 	kernelQ json.RawMessage
 	pending *change
 	seq     int
+	// releaseAfter > 0: the pending foreign change clears after answering
+	// that many more conflicts (HoldPendingConflicts).
+	releaseAfter int
 	// Counters and switches for tests.
 	Confirms, Rollbacks, Conflicts int
 	FailConfirm                    bool
@@ -251,8 +254,7 @@ func (s *Server) anchor(w http.ResponseWriter, r *http.Request, actor, name stri
 		return
 	}
 	if s.pending != nil {
-		s.Conflicts++
-		fail(w, 409, "conflict", "change "+s.pending.id+" is pending")
+		s.conflict(w, "change "+s.pending.id+" is pending")
 		return
 	}
 	switch {
@@ -308,8 +310,7 @@ func (s *Server) table(w http.ResponseWriter, r *http.Request, actor, name strin
 		writeJSON(w, 200, map[string]any{"table": map[string]any{"name": name, "entries": cur}, "etag": tag})
 	case http.MethodPut:
 		if s.pending != nil {
-			s.Conflicts++
-			fail(w, 409, "conflict", "change pending")
+			s.conflict(w, "change pending")
 			return
 		}
 		if ifMatch(r) != tag {
@@ -364,8 +365,7 @@ func (s *Server) qosDoc(w http.ResponseWriter, r *http.Request, actor string) {
 		writeJSON(w, 200, map[string]any{"qos": s.qos, "etag": tag})
 	case http.MethodPut:
 		if s.pending != nil {
-			s.Conflicts++
-			fail(w, 409, "conflict", "change pending")
+			s.conflict(w, "change pending")
 			return
 		}
 		if ifMatch(r) != tag {
@@ -450,6 +450,29 @@ func (s *Server) finish(w http.ResponseWriter, actor, id, what string) {
 
 // HoldPending makes another client's change pending for d, so changes
 // from the tests get 409 until it clears.
+// conflict answers 409 for a pending change (s.mu held).
+func (s *Server) conflict(w http.ResponseWriter, msg string) {
+	s.Conflicts++
+	fail(w, 409, "conflict", msg)
+	if s.releaseAfter > 0 {
+		s.releaseAfter--
+		if s.releaseAfter == 0 {
+			s.pending = nil
+		}
+	}
+}
+
+// HoldPendingConflicts makes another client's change pending until it has
+// been answered with n conflicts. Unlike HoldPending it does not depend on
+// how fast the test's requests arrive.
+func (s *Server) HoldPendingConflicts(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seq++
+	s.pending = &change{id: fmt.Sprintf("%016x", s.seq), actor: "someone-else", kind: "anchor", name: "other", op: "put"}
+	s.releaseAfter = n
+}
+
 func (s *Server) HoldPending(d time.Duration) {
 	s.mu.Lock()
 	s.seq++

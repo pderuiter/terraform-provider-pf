@@ -27,9 +27,11 @@ type PortRange struct {
 }
 
 type Endpoint struct {
+	Negate    bool        `json:"negate,omitempty"`
 	Prefixes  []string    `json:"prefixes,omitempty"`
 	Table     string      `json:"table,omitempty"`
 	Interface string      `json:"interface,omitempty"`
+	Self      bool        `json:"self,omitempty"`
 	Ports     []PortRange `json:"ports,omitempty"`
 }
 
@@ -60,6 +62,7 @@ type Rule struct {
 	From        Endpoint  `json:"from"`
 	To          Endpoint  `json:"to"`
 	NAT         *NAT      `json:"nat,omitempty"`
+	ICMPTypes   []string  `json:"icmp_types,omitempty"`
 	Prio        *Prio     `json:"prio,omitempty"`
 	Queue       *QueueSet `json:"queue,omitempty"`
 	Label       string    `json:"label,omitempty"`

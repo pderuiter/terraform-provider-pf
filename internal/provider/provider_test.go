@@ -155,6 +155,69 @@ func TestAccAnchor(t *testing.T) {
 	}
 }
 
+// The base-ruleset forms wbyc-fw01 migrates into anchors: a negated
+// (referenced) table, self and icmp-type. They must round-trip without a
+// diff, through import too.
+const anchorNegation = `
+resource "pf_anchor" "egress" {
+  name = "egress"
+  rules = [
+    {
+      action    = "pass"
+      direction = "in"
+      interface = "vlan699"
+      family    = "inet"
+      from      = { table = "clusters" }
+      to        = { negate = true, table = "rfc1918" }
+    },
+    {
+      action     = "pass"
+      direction  = "in"
+      interface  = "vlan699"
+      family     = "inet"
+      protocol   = "icmp"
+      from       = { table = "clusters" }
+      to         = { self = true }
+      icmp_types = ["echoreq"]
+    },
+    {
+      action     = "pass"
+      direction  = "in"
+      interface  = "vlan699"
+      family     = "inet6"
+      protocol   = "icmp6"
+      from       = { negate = true, prefixes = ["fd00::/8"] }
+      icmp_types = ["echoreq", "128"]
+    },
+  ]
+}
+`
+
+func TestAccAnchorNegationICMP(t *testing.T) {
+	s := useFake(t)
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: anchorNegation,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("pf_anchor.egress", "rules.0.to.negate", "true"),
+					resource.TestCheckResourceAttr("pf_anchor.egress", "rules.0.to.self", "false"),
+					resource.TestCheckResourceAttr("pf_anchor.egress", "rules.0.from.negate", "false"),
+					resource.TestCheckResourceAttr("pf_anchor.egress", "rules.1.to.self", "true"),
+					resource.TestCheckResourceAttr("pf_anchor.egress", "rules.1.icmp_types.0", "echoreq"),
+					resource.TestCheckResourceAttr("pf_anchor.egress", "rules.2.icmp_types.#", "2"),
+				),
+			},
+			{Config: anchorNegation, PlanOnly: true},
+			{ResourceName: "pf_anchor.egress", ImportState: true, ImportStateId: "egress", ImportStateVerify: true},
+		},
+	})
+	if s.Anchor("egress") != nil {
+		t.Fatal("anchor left behind after destroy")
+	}
+}
+
 func TestAccAnchorRejectedAtPlan(t *testing.T) {
 	s := useFake(t)
 	resource.Test(t, resource.TestCase{
@@ -181,6 +244,11 @@ func TestAccAnchorConfigValidation(t *testing.T) {
 		"host bits":            `from = { prefixes = ["10.1.2.3/8"] }`,
 		"two address kinds":    `from = { prefixes = ["10.0.0.0/8"], table = "x" }`,
 		"empty endpoint":       `from = {}`,
+		"self and table":       `to = { self = true, table = "x" }`,
+		"negate nothing":       `to = { negate = true, ports = [{ from = 22 }] }`,
+		"negated list":         `to = { negate = true, prefixes = ["10.0.0.0/8", "192.168.0.0/16"] }`,
+		"icmp type injection":  `protocol = "icmp", icmp_types = ["echoreq }"]`,
+		"icmp type duplicate":  `protocol = "icmp", icmp_types = ["echoreq", "echoreq"]`,
 		"label injection":      `label = "x\" pass all"`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -189,7 +257,7 @@ func TestAccAnchorConfigValidation(t *testing.T) {
 				Steps: []resource.TestStep{{
 					Config:      `resource "pf_anchor" "x" { ` + "\n" + `name = "x"` + "\n" + `rules = [{ action = "pass", interface = "frontend", family = "inet", ` + cfg + ` }]` + "\n}",
 					PlanOnly:    true,
-					ExpectError: regexp.MustCompile(`(?i)invalid|conflicting|empty endpoint|must`),
+					ExpectError: regexp.MustCompile(`(?i)invalid|conflicting|empty endpoint|must|negate|duplicate`),
 				}},
 			})
 		})
