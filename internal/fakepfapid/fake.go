@@ -448,8 +448,6 @@ func (s *Server) finish(w http.ResponseWriter, actor, id, what string) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// HoldPending makes another client's change pending for d, so changes
-// from the tests get 409 until it clears.
 // conflict answers 409 for a pending change (s.mu held).
 func (s *Server) conflict(w http.ResponseWriter, msg string) {
 	s.Conflicts++
@@ -473,6 +471,8 @@ func (s *Server) HoldPendingConflicts(n int) {
 	s.releaseAfter = n
 }
 
+// HoldPending makes another client's change pending for d, so changes
+// from the tests get 409 until it clears.
 func (s *Server) HoldPending(d time.Duration) {
 	s.mu.Lock()
 	s.seq++
